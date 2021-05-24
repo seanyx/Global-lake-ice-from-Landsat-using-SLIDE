@@ -1,0 +1,1 @@
+# Global lake ice from Landsat using SLIDE algorithms
