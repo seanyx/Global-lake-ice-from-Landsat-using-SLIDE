@@ -67,7 +67,7 @@ for i in range(start_month + rs, n):
 
     lsFil = ls.filterDate(t_start, t_end)
 
-    monthly_lake_ice = lsFil.map(Calc_lake_ice_gen(lakesFil, model, wocc)).flatten().limit(100)
+    monthly_lake_ice = lsFil.map(Calc_lake_ice_gen(lakesFil, model, wocc)).flatten()
     
     # print(ee.Feature(monthly_lake_ice.first()).toDictionary().getInfo())
     fn = 'SLIDE_lake_ice' + format(minc, '02d') + '-' + format(maxc, '02d') + '_' + t_start
