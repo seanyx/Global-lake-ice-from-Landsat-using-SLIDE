@@ -47,7 +47,7 @@ model = SLIDE()
 
 wocc = ee.Image("JRC/GSW1_3/GlobalSurfaceWater").select(['occurrence'])
 
-exportedProperties = ['system:index', 'LANDSAT_SCENE_ID', 'Fmask_snowIce', 'cloud', 'water', 'clear', 'SLIDE_snowIce', 'missing_data', 'hillshadow', 'mean_2m_air_temperature', 'total_precipitation', 'u_component_of_wind_10m', 'v_component_of_wind_10m', 'Hylak_id']
+exportedProperties = ['LANDSAT_SCENE_ID', 'Fmask_snowIce', 'cloud', 'water', 'clear', 'SLIDE_snowIce', 'missing_data', 'hillshadow', 'mean_2m_air_temperature', 'total_precipitation', 'u_component_of_wind_10m', 'v_component_of_wind_10m', 'Hylak_id']
 
 if output_dir == 'default':
     output_dir = 'SLIDE_lake_ice_' + 'cs' + str(minc) + '-' + str(maxc) + '_' + str(start_year) + '-' + str(start_month) + '_' + str(end_year) + '-' + str(end_month)
@@ -82,6 +82,6 @@ for i in range(start_month + rs, n):
 
     task.start()
 
-    maximum_no_of_tasks(8, 120)
+    maximum_no_of_tasks(4, 180)
 
     print('task', i - start_month + 1, 'of', n - start_month, ', (', t_start, t_end, ')', 'has submitted.')
