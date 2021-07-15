@@ -77,6 +77,7 @@ for i in range(start_month + rs, n):
             description = fn,
             folder = output_dir,
             fileNamePrefix = fn,
+            selectors = exportedProperties,
             fileFormat = 'CSV'))
 
     task.start()
