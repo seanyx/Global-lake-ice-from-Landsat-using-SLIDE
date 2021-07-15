@@ -11,107 +11,181 @@ knitr::opts_chunk$set(echo = TRUE)
 require(tidyverse)
 require(sf)
 require(lubridate)
+require(foreach)
 ```
 
+# import the data
+Due to the large column of the data, each monthly file has been processed and divide into several files according to predefined lake subsets.
+
+## check how many months have missing columns
 ```{r}
-dat = read_csv("data/lakeCoverFraction_small_area_f55e25b0787453edf650429f86ae9c82.csv")
+dirs = c("~/Google_Drive_morphologee1/python_gee_v1", "~/Google_Drive_yxiao/python_gee_v1")
+filename = dir(dirs, pattern = "*.csv", full.names = F)
+files = dir(dirs, pattern = "*.csv", full.names = T)
+filesize = file.size(files)
 
-dat %>% select(Hylak_id) %>% distinct()
-dat %>% filter(missing_data == 0, cloud <= 0.1) %>% count(Hylak_id, sort = T) %>% slice_head(n = 9) %>% 
-  left_join(dat, by = "Hylak_id") %>% 
-  filter(cloud <= 0.1,
-         missing_data == 0) %>% 
-  ggplot(aes(x = doy, y = SLIDE_snowIce, color = parse_integer(substr(LANDSAT_SCENE_ID, start = 10, stop = 13)))) +
-  geom_point() +
-  scale_colour_viridis_c() +
-  facet_wrap(~Hylak_id) +
-  theme(legend.position = "bottom",
-        legend.direction = "horizontal")
-```
+file_info = tibble(file_name = filename, file_size = filesize, file_path = files)
 
-```{r}
-dat %>% filter(missing_data == 0, cloud <= 0.1) %>% count(Hylak_id, sort = T) %>% slice_head(n = 9) %>% 
-  left_join(dat, by = "Hylak_id") %>% 
-  filter(cloud <= 0.1,
-         missing_data == 0) %>% 
-  group_by(Hylak_id) %>% 
-  slice_sample(n = 1) %>% 
-  ungroup()
-```
-
-
-
-## test python script results
-
-```{r}
-read_csv("data/lake_ice_monthly_SLIDE_v1_20210524/lake_ice_monthly_SLIDE_1984-10-01.csv")
-
-dat = dir("data/lake_ice_monthly_SLIDE_v1_20210524", pattern = "*.csv", full.names = T) %>% 
-  map(read_csv) %>% 
-  reduce(bind_rows)
-
-# , col_types = "cnncnnnnnnnnnnc"
-
-datFil = dat %>% select(-`.geo`) %>% 
-  na.omit() %>% 
-  filter(missing_data == 0,
-         cloud == 0,
-         hillshadow == 0) %>% 
-  mutate(doy = as.integer(substr(LANDSAT_SCENE_ID, start = 14, stop = 16)),
-         windAbs = sqrt(u_component_of_wind_10m^2 + v_component_of_wind_10m^2))
-
-# sanity check
-datFil %>% transmute(total = Fmask_snowIce + water + clear) %>% summary()
-
-hl = st_read(dsn = "~/Google_Drive/Map layers/HydroLAKES_polys_v10_shp/HydroLAKES_polys_v10_shp/HydroLAKES_polys_v10.shp") %>% st_drop_geometry() %>% as_tibble()
-
-modelInput = datFil %>% left_join(hl %>% select(Lake_type, Lake_area, Shore_dev, Vol_total, Depth_avg, Res_time, Elevation, Hylak_id), by = "Hylak_id")
-
-remove(hl)
-
-require(ggpointdensity)
-
-river_ice_model = function(SAT30, period) {
-  a = -0.32
-  b = -0.05
-  c = -0.82
-  logodds = a * SAT30 + b * SAT30 * period + c
-  
-  ice_frac = exp(logodds) / (1 + exp(logodds))
-  
-  return(ice_frac)
+check_ncol = foreach(i = 1:nrow(file_info), .combine = "rbind") %do% {
+  temp = read_csv(file_info$file_path[i], n_max = 10)
+  nc = temp %>% ncol()
+  nr = temp %>% nrow()
+  tibble(file_name = file_info$file_name[i], ncols = nc, nrows = nr)
 }
 
-x = -40:30
-river_ice_curve_BU = tibble(x, river_ice = river_ice_model(x, 0), period = "River ice breakup")
-river_ice_curve_FU = tibble(x, river_ice = river_ice_model(x, 1), period = "River ice freeze-up")
-river_ice_curve = bind_rows(river_ice_curve_BU, river_ice_curve_FU)
+check_ncol = check_ncol %>% 
+  mutate(yr = as.integer(substr(file_name, start = 21, stop = 24)),
+         mth = as.integer(substr(file_name, start = 26, stop = 27)))
 
-temp_ice_model_comp = datFil %>% 
-  sample_n(200000) %>% 
-  ggplot() +
-  # geom_pointdensity(aes(x = mean_2m_air_temperature - 273.15, y = SLIDE_snowIce), stat = "pointdensity", adjust = 1) +
-  geom_hex(aes(x = mean_2m_air_temperature - 273.15, y = SLIDE_snowIce, fill = log10(..count..))) +
-  geom_line(data = river_ice_curve, aes(x = x, y = river_ice, color = period)) +
-  geom_smooth(aes(x = mean_2m_air_temperature - 273.15, y = SLIDE_snowIce, color = "Lake ice"), method = "glm", method.args = list(family = quasibinomial(link = "logit"))) +
-  scale_fill_gradientn(colors = grey(rev(seq(0.1, 0.9, by = 0.01)))) +
-  scale_colour_viridis_d(direction = -1) +
-  scale_y_continuous(labels = scales::percent) +
-  theme_bw() +
-  labs(x = "Prior 30 day mean SAT (ºC)",
-       y = "Ice cover fraction",
-       color = "model")
+check_ncol %>% count(ncols)
+check_ncol %>% count(nrows)
 
-temp_ice_model_comp
+## yr-months that don't have all the variables
+cmissing = check_ncol %>% filter(ncols < 15) %>% select(yr, mth) %>% arrange(yr, mth)
 
-temp_ice_model_comp %>% ggsave(filename = "figs/temp_ice_model_comp.png", width = 7, height = 4)
+## yr-months that have empty files
+rmissing = check_ncol %>% filter(nrows == 0) %>% select(yr, mth) %>% arrange(yr, mth)
 
 
-## quick model lake ice
+## any missing export to python script
+export_missing = cmissing %>% bind_rows(rmissing) %>% distinct() %>% 
+  rename(yr1 = yr, mth1 = mth) %>% 
+  mutate(yr2 = ifelse(mth1 == 12, yr1 + 1, yr1),
+         mth2 = ifelse(mth1 == 12, 1, mth1 + 1))
 
+write_csv(export_missing, file = "gee_code/export_missing.csv")
 
-fit = glm(SLIDE_snowIce ~ windAbs + mean_2m_air_temperature + total_precipitation + Lake_area + Shore_dev + Vol_total + Depth_avg + Res_time + Elevation, family = quasibinomial(link = "logit"), data = modelInput)
-
-summary(fit)
+N = nrow(export_missing)
+write_csv(export_missing[1:floor(N/2), ], file = "gee_code/export_missing_morphologee.csv")
+write_csv(export_missing[(floor(N/2) + 1):N, ], file = "gee_code/export_missing_altemis.csv")
 ```
+
+
+
+```{r}
+filename = dir("~/Google_Drive_morphologee1/python_gee_v1", pattern = "*.csv", full.names = F)
+files = dir("~/Google_Drive_morphologee1/python_gee_v1", pattern = "*.csv", full.names = T)
+filesize = file.size(files)
+
+file_info = tibble(file_name = filename, file_size = filesize, file_path = files) %>% 
+  filter(file_size > 4) %>% 
+  mutate(yr = as.integer(substr(file_name, start = 21, stop = 24)))
+
+for (i in unique(file_info$yr)[1]) {
+  temp = file_info %>% filter(yr == i) %>% pull(file_path) %>% 
+    map(read_csv) %>% 
+    reduce(bind_rows)
+  
+  save(temp, file = paste0("outputs/lake_ice_SLIDE_yr_", i, ".RData"))
+}
+
+test = read_csv(files[1], col_types = "cnicnnnnnnnnnni") %>% 
+  select(-`system:index`, -`.geo`) %>% 
+  filter(!is.na(SLIDE_snowIce))
+```
+
+
+
+
+<!-- ```{r} -->
+<!-- dat = read_csv("data/lakeCoverFraction_small_area_f55e25b0787453edf650429f86ae9c82.csv") -->
+
+<!-- dat %>% select(Hylak_id) %>% distinct() -->
+<!-- dat %>% filter(missing_data == 0, cloud <= 0.1) %>% count(Hylak_id, sort = T) %>% slice_head(n = 9) %>%  -->
+<!--   left_join(dat, by = "Hylak_id") %>%  -->
+<!--   filter(cloud <= 0.1, -->
+<!--          missing_data == 0) %>%  -->
+<!--   ggplot(aes(x = doy, y = SLIDE_snowIce, color = parse_integer(substr(LANDSAT_SCENE_ID, start = 10, stop = 13)))) + -->
+<!--   geom_point() + -->
+<!--   scale_colour_viridis_c() + -->
+<!--   facet_wrap(~Hylak_id) + -->
+<!--   theme(legend.position = "bottom", -->
+<!--         legend.direction = "horizontal") -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- dat %>% filter(missing_data == 0, cloud <= 0.1) %>% count(Hylak_id, sort = T) %>% slice_head(n = 9) %>%  -->
+<!--   left_join(dat, by = "Hylak_id") %>%  -->
+<!--   filter(cloud <= 0.1, -->
+<!--          missing_data == 0) %>%  -->
+<!--   group_by(Hylak_id) %>%  -->
+<!--   slice_sample(n = 1) %>%  -->
+<!--   ungroup() -->
+<!-- ``` -->
+
+
+
+<!-- ## test python script results -->
+
+<!-- ```{r} -->
+<!-- read_csv("data/lake_ice_monthly_SLIDE_v1_20210524/lake_ice_monthly_SLIDE_1984-10-01.csv") -->
+
+<!-- dat = dir("data/lake_ice_monthly_SLIDE_v1_20210524", pattern = "*.csv", full.names = T) %>%  -->
+<!--   map(read_csv) %>%  -->
+<!--   reduce(bind_rows) -->
+
+<!-- # , col_types = "cnncnnnnnnnnnnc" -->
+
+<!-- datFil = dat %>% select(-`.geo`) %>%  -->
+<!--   na.omit() %>%  -->
+<!--   filter(missing_data == 0, -->
+<!--          cloud == 0, -->
+<!--          hillshadow == 0) %>%  -->
+<!--   mutate(doy = as.integer(substr(LANDSAT_SCENE_ID, start = 14, stop = 16)), -->
+<!--          windAbs = sqrt(u_component_of_wind_10m^2 + v_component_of_wind_10m^2)) -->
+
+<!-- # sanity check -->
+<!-- datFil %>% transmute(total = Fmask_snowIce + water + clear) %>% summary() -->
+
+<!-- hl = st_read(dsn = "~/Google_Drive/Map layers/HydroLAKES_polys_v10_shp/HydroLAKES_polys_v10_shp/HydroLAKES_polys_v10.shp") %>% st_drop_geometry() %>% as_tibble() -->
+
+<!-- modelInput = datFil %>% left_join(hl %>% select(Lake_type, Lake_area, Shore_dev, Vol_total, Depth_avg, Res_time, Elevation, Hylak_id), by = "Hylak_id") -->
+
+<!-- remove(hl) -->
+
+<!-- require(ggpointdensity) -->
+
+<!-- river_ice_model = function(SAT30, period) { -->
+<!--   a = -0.32 -->
+<!--   b = -0.05 -->
+<!--   c = -0.82 -->
+<!--   logodds = a * SAT30 + b * SAT30 * period + c -->
+
+<!--   ice_frac = exp(logodds) / (1 + exp(logodds)) -->
+
+<!--   return(ice_frac) -->
+<!-- } -->
+
+<!-- x = -40:30 -->
+<!-- river_ice_curve_BU = tibble(x, river_ice = river_ice_model(x, 0), period = "River ice breakup") -->
+<!-- river_ice_curve_FU = tibble(x, river_ice = river_ice_model(x, 1), period = "River ice freeze-up") -->
+<!-- river_ice_curve = bind_rows(river_ice_curve_BU, river_ice_curve_FU) -->
+
+<!-- temp_ice_model_comp = datFil %>%  -->
+<!--   sample_n(200000) %>%  -->
+<!--   ggplot() + -->
+<!--   # geom_pointdensity(aes(x = mean_2m_air_temperature - 273.15, y = SLIDE_snowIce), stat = "pointdensity", adjust = 1) + -->
+<!--   geom_hex(aes(x = mean_2m_air_temperature - 273.15, y = SLIDE_snowIce, fill = log10(..count..))) + -->
+<!--   geom_line(data = river_ice_curve, aes(x = x, y = river_ice, color = period)) + -->
+<!--   geom_smooth(aes(x = mean_2m_air_temperature - 273.15, y = SLIDE_snowIce, color = "Lake ice"), method = "glm", method.args = list(family = quasibinomial(link = "logit"))) + -->
+<!--   scale_fill_gradientn(colors = grey(rev(seq(0.1, 0.9, by = 0.01)))) + -->
+<!--   scale_colour_viridis_d(direction = -1) + -->
+<!--   scale_y_continuous(labels = scales::percent) + -->
+<!--   theme_bw() + -->
+<!--   labs(x = "Prior 30 day mean SAT (ºC)", -->
+<!--        y = "Ice cover fraction", -->
+<!--        color = "model") -->
+
+<!-- temp_ice_model_comp -->
+
+<!-- temp_ice_model_comp %>% ggsave(filename = "figs/temp_ice_model_comp.png", width = 7, height = 4) -->
+
+
+<!-- ## quick model lake ice -->
+
+
+<!-- fit = glm(SLIDE_snowIce ~ windAbs + mean_2m_air_temperature + total_precipitation + Lake_area + Shore_dev + Vol_total + Depth_avg + Res_time + Elevation, family = quasibinomial(link = "logit"), data = modelInput) -->
+
+<!-- summary(fit) -->
+<!-- ``` -->
 
