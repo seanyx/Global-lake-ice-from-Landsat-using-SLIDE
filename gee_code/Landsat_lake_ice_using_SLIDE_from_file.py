@@ -74,6 +74,6 @@ for i in range(N):
 
     task.start()
 
-    maximum_no_of_tasks(4, 120)
+    maximum_no_of_tasks(4, 600)
     # print(t_start, t_end)
     print(fn, 'has submitted.')
